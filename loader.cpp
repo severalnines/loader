@@ -19,6 +19,7 @@
 #include <sstream>
 #include <iterator>
 #include <vector>
+#include <queue>
 #include <algorithm>
 #include <my_global.h>
 #include <mysql.h>
@@ -32,6 +33,7 @@
 
 using namespace std;
 
+#define MAX_QUEUE_SIZE 10000
 
 static char user[255];
 static char host[255];
@@ -42,6 +44,7 @@ static char filename[255];
 static int port=3306;
 static int splits=4;
 static bool verbose=false;
+static bool complete=false;
 
 
 //#########################################################################################
@@ -161,12 +164,58 @@ struct threadData_t {
   
   threadData_t(int s)
   {  
-    split=s;
+    split=s;   
+    running = true;
+    q = new queue<string>;
+    if(pthread_mutex_init(&mutex, NULL))
+      perror("init_lock:");
+  }
+  
+  void lock()
+  {
+    if(pthread_mutex_lock(&mutex))
+      perror("lock:");
   }
 
+  void unlock()
+  {
+    if(pthread_mutex_unlock(&mutex))
+      perror("unlock:");
+  }
+
+  ~threadData_t()
+  {
+    pthread_mutex_destroy(&mutex);
+  }
+  
+  pthread_mutex_t mutex;
   int split;
+  bool running;
+  queue<string> * q;
 };
 
+
+int find_queue(vector<struct threadData_t *> & tdata)
+{
+  int queue=-1;
+  
+  unsigned long long sz=ULLONG_MAX;  
+  for (unsigned int i=0;i<tdata.size(); i++)
+    {
+      tdata[i]->lock();
+      if(tdata[i]->q->size() < MAX_QUEUE_SIZE)
+	{
+	  if(tdata[i]->q->size() < sz)
+	    {
+	      sz=tdata[i]->q->size();
+	      queue=i;
+	    }
+	}
+      tdata[i]->unlock();	
+    }
+  return queue;
+  
+}
 
 
 void *
@@ -174,24 +223,6 @@ applier (void * t)
 {
   threadData_t * ctx = (threadData_t *)t;
   int split=ctx->split;
-  
-  stringstream filename;
-  filename << "out_" << split << ".sql";
-  
-  
-  cout << "applier " << split << " opening " << filename.str() << endl;
-
-  ifstream splitfile(filename.str().c_str());
-  
-  splitfile.unsetf(std::ios_base::skipws);
-  
-  unsigned long long line_count = std::count(
-					     std::istream_iterator<char>(splitfile),
-					     std::istream_iterator<char>(), 
-					     '\n');
-  splitfile.close();
-  splitfile.open(filename.str().c_str());
-
   
   MYSQL mysql;
 
@@ -213,37 +244,49 @@ applier (void * t)
 
   
   
-  unsigned long long lineno=0;  
+  unsigned long long applied_lines=0;  
   string line="";
-  while(!splitfile.eof())    
+
+  while(ctx->running)    
     {
-      line="";
-      getline(splitfile,line);
+      
+      if(ctx->q->size()==0 && !complete)
+	{
+	  usleep(1000*1000);
+	  cout << "Queue (thread id:" << ctx->split << ") is empty" << endl;
+	  continue;
+	}
+      if(complete && ctx->q->size()==0)
+	{	  
+	  break;
+	}
+      
+      ctx->lock();
+      line=ctx->q->front();
+      ctx->q->pop();
+      ctx->unlock();
       if(line.compare("")==0)
 	continue;
       if(line.compare(0,6,"INSERT")!=0)
 	continue;
       
-      lineno++;	    
-
       string::size_type pos = line.find_last_of(";");
       if(pos !=string::npos)
 	{
 	  line.erase(pos);
 	}
-      if(lineno > 0 && (lineno % 1000 == 0))
-	{
-	  cout << filename.str() << " : applied " << lineno << " of " << line_count << endl;      
-	}
 
       if(mysql_real_query( &mysql, line.c_str(), strlen(line.c_str()) ))
 	{	  
-	  cout << "query error ("<< filename.str() << ")" << " :" + string(mysql_error(&mysql)) << endl;
+	  cout << "query error (thread id:" << ctx->split << ")" << " :" + string(mysql_error(&mysql)) << endl;
 	  return 0;
 	}
+      applied_lines++;
+      if(applied_lines % 10 == 0)
+	cout << "Queue (thread id:" << ctx->split << ") applied " << applied_lines << endl;
     }
 
-  cout << "Done: "  << filename.str() << " : applied" << lineno << " of " << line_count << endl;
+  cout << "Queue (thread id:" << ctx->split << ") finished applying. Applied " << applied_lines << endl;
   return 0;
 }
 
@@ -253,9 +296,6 @@ int main(int argc, char ** argv)
   /**
    * define a connect string to the management server
    */
-  
-
-
   strcpy(database, "test");
   strcpy(user, "root");
   strcpy(host, "127.0.0.1");
@@ -303,42 +343,13 @@ int main(int argc, char ** argv)
 
   string line;
   unsigned long long lineno=0;
-  int current_split=0;
-  
-  ofstream outfile;
-  
-  stringstream out_file;
-  out_file << "out_" << current_split << ".sql";
-  outfile.open(out_file.str().c_str(),ios::out);
-  
-  int curr_line_in_split=0;
-  while(!dumpfile.eof())
-    {      
-      if( (curr_line_in_split == lines_per_split) && (current_split < splits-1))
-	{
-	  cout << "wrote " << out_file.str() << endl;
-	  current_split++;
-	  outfile.close();
-	  out_file.str("");
-	  out_file << "out_" << current_split << ".sql";
-	  outfile.open(out_file.str().c_str());
-	  curr_line_in_split=0;
-	}
-      getline(dumpfile,line);  
-      curr_line_in_split++;  	    
-      outfile << line  << endl;
-      lineno++;
-    }
-  outfile.close();
-  cout << "wrote " << out_file.str() << endl;
 
-  // start real stuff here:
   
   vector<pthread_t> threads;
   threads.resize(splits);
   
   threadData_t * td;  
-  vector<struct threadData_t *> tdata;
+  vector<struct threadData_t *> tdata; 
   for(int i=0; i< splits ;i++) 
     {  
       td=new threadData_t(i);
@@ -349,7 +360,34 @@ int main(int argc, char ** argv)
       cout << "starting applier thread : " << i << endl;
       pthread_create(&threads[i], NULL, applier, tdata[i]);	
     }
+
+  int selected_queue=0;
+  cout << "Going to read dumpfile" << endl;
+  while(!dumpfile.eof())
+    {      
+      selected_queue=find_queue(tdata);
+      while(selected_queue==-1)
+	{
+	  usleep(1000*500);
+	  selected_queue=find_queue(tdata);
+	}
+
+      getline(dumpfile,line);  
+      if(line.compare(0,6,"INSERT")!=0)
+	continue;
+
+
+      tdata[selected_queue]->lock();
+      tdata[selected_queue]->q->push(line);
+      tdata[selected_queue]->unlock();
+      lineno++;
+    }
+  complete=true;
   
+  cout << "pushed " << lineno << " to the queues " << endl;
+  // start real stuff here:
+  
+ 
   for(int i=0; i< splits ;i++) 
     {
       pthread_join(threads[i], NULL);

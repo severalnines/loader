@@ -40,3 +40,4 @@ bin/
 cmake_install.cmake
 CPackSourceConfig.cmake
 *.deb
+loader
