@@ -1,4 +1,4 @@
-TARGET = loader2
+TARGET = loader
 SRCS = $(TARGET).cpp
 OBJS = $(TARGET).o
 CXX = g++

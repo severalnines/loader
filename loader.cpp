@@ -222,8 +222,6 @@ void *
 applier (void * t)
 {
   threadData_t * ctx = (threadData_t *)t;
-  int split=ctx->split;
-  
   MYSQL mysql;
 
   mysql_init(&mysql);
