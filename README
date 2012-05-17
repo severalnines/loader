@@ -13,7 +13,7 @@ Dumping out the 'test' database:
 
 mysqldump --no-data -uroot -p -h127.0.0.1 test > test-schema.sql
 
-mysqldump --no-create-info -uroot -p -h127.0.0.1 test > test-data.sql
+mysqldump --skip-comments --no-create-info -uroot -p -h127.0.0.1 test > test-data.sql
 
 The best and recommended is thus to have a particular schema file
 
