@@ -46,7 +46,6 @@ static int splits=4;
 static bool verbose=false;
 static bool complete=false;
 
-
 //#########################################################################################
 //#########################################################################################
 void print_help()
@@ -166,6 +165,7 @@ struct threadData_t {
   {  
     split=s;   
     running = true;
+    applied_lines=0LL;
     q = new queue<string>;
     if(pthread_mutex_init(&mutex, NULL))
       perror("init_lock:");
@@ -191,6 +191,7 @@ struct threadData_t {
   pthread_mutex_t mutex;
   int split;
   bool running;
+  unsigned long long applied_lines;
   queue<string> * q;
 };
 
@@ -218,6 +219,18 @@ int find_queue(vector<struct threadData_t *> & tdata)
 }
 
 
+unsigned long long  get_count(vector<struct threadData_t *> & tdata)
+{
+  unsigned long long total_applied_lines=0LL;
+  for (unsigned int i=0;i<tdata.size(); i++)
+    {
+      total_applied_lines+=tdata[i]->applied_lines;
+    }
+  return total_applied_lines;
+  
+}
+
+
 void *
 applier (void * t)
 {
@@ -239,10 +252,7 @@ applier (void * t)
       cout << "connect error:" + string(mysql_error(&mysql)) << endl;
       return 0;
     }
-
-  
-  
-  unsigned long long applied_lines=0;  
+   
   string line="";
 
   while(ctx->running)    
@@ -251,7 +261,7 @@ applier (void * t)
       if(ctx->q->size()==0 && !complete)
 	{
 	  usleep(1000*1000);
-	  cout << "Queue (thread id:" << ctx->split << ") is empty" << endl;
+	  //	  cout << "Queue (thread id:" << ctx->split << ") is empty" << endl;
 	  continue;
 	}
       if(complete && ctx->q->size()==0)
@@ -279,12 +289,13 @@ applier (void * t)
 	  cout << "query error (thread id:" << ctx->split << ")" << " :" + string(mysql_error(&mysql)) << endl;
 	  return 0;
 	}
-      applied_lines++;
-      if(applied_lines % 10 == 0)
-	cout << "Queue (thread id:" << ctx->split << ") applied " << applied_lines << endl;
+      ctx->applied_lines++;
+      
+      if(ctx->applied_lines % 10 == 0)
+      	cout << "Queue (thread id:" << ctx->split << ") applied " << ctx->applied_lines << endl;
     }
 
-  cout << "Queue (thread id:" << ctx->split << ") finished applying. Applied " << applied_lines << endl;
+  cout << "Queue (thread id:" << ctx->split << ") finished applying. Applied " << ctx->applied_lines << endl;
   return 0;
 }
 
@@ -302,7 +313,7 @@ int main(int argc, char ** argv)
   port=3306;
   
 
-
+  unsigned long long total_applied_lines=0LL;
   option(argc,argv);
   
   char * db;
@@ -363,6 +374,11 @@ int main(int argc, char ** argv)
   cout << "Going to read dumpfile" << endl;
   while(!dumpfile.eof())
     {      
+      
+      total_applied_lines=get_count(tdata);
+      
+      if(total_applied_lines > 0 && (total_applied_lines % 10 == 0))
+	cout << "Total applied lines: " << total_applied_lines << " out of approximately " << line_count << "(better approx will follow)" << endl;
       selected_queue=find_queue(tdata);
       while(selected_queue==-1)
 	{
@@ -382,9 +398,18 @@ int main(int argc, char ** argv)
     }
   complete=true;
   
-  cout << "pushed " << lineno << " to the queues " << endl;
+  cout << "Reading dumpfile completed, pushed " << lineno << " to the queues " << endl;
   // start real stuff here:
-  
+  total_applied_lines=get_count(tdata);
+  while(total_applied_lines != lineno)
+    {
+      sleep(1);
+      total_applied_lines=get_count(tdata);
+      if(total_applied_lines > 0 && (total_applied_lines % 10 == 0))
+	cout << "Total applied lines: " << total_applied_lines << " out of " << lineno << endl;
+    }
+  cout << endl << "Done!" << endl;
+  cout << "Total applied lines: " << total_applied_lines << " out of " << lineno << endl;
  
   for(int i=0; i< splits ;i++) 
     {
