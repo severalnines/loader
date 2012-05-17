@@ -24,3 +24,16 @@ mysql -uroot -p -h <target_host> test < test-schema.sql
 ./loader2 -s 2 -f test-data.sql -uroot -p -h <target_host>
 
 -s defines the number of splits, in the example above 2 threads will be used to apply the data.
+
+
+SUPPORTED PARAMS:
+
+./loader2  -?
+  -? --help	prints this information
+  -u --user (mysql) , default 'root'
+  -p --password (mysql) , default is ''
+  -P --port (mysql) , default is 3306
+  -h --host (mysql) , default is '127.0.0.1'
+  -S --socket (mysql) , default '/tmp/mysql.sock'
+  -s --splits (number of splits, parallelism), default 4
+  -d --database=<db name> target db, default 'test'
