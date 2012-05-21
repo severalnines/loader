@@ -223,8 +223,7 @@ int find_queue(vector<struct threadData_t *> & tdata)
 	}
       //      tdata[i]->unlock();	
     }
-  return queue;
-  
+  return queue; 
 }
 
 
