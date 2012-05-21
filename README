@@ -1,4 +1,3 @@
-
 BUILDING:
 
 Edit the Makefile and change MYSQL_BASEDIR.
@@ -41,3 +40,6 @@ SUPPORTED PARAMS:
   -S --socket (mysql) , default '/tmp/mysql.sock'
   -s --splits (number of splits, parallelism), default 4
   -d --database=<db name> target db, default 'test'
+
+BUGS:
+https://github.com/severalnines/loader/issues
