@@ -67,7 +67,7 @@ void print_help()
 
 
 
-int option(int argc, char** argv)
+int option(int argc, char** argv, vector<string> & mysql_servers)
 {
   int c;
   
@@ -124,6 +124,13 @@ int option(int argc, char** argv)
 	  strcpy(user,optarg);
 	  break;
 	case 'h':
+	  char * dd;
+	  dd = strtok( optarg,";, ");
+	  while (dd != NULL)
+	    {
+	      mysql_servers.push_back(string(dd));
+	      dd = strtok (NULL, ";, ");
+	    }
 	  memset( host,0,255);
 	  strcpy(host,optarg);
 	  break;
@@ -161,9 +168,10 @@ int option(int argc, char** argv)
 
 struct threadData_t {
   
-  threadData_t(int s)
+  threadData_t(int s, string h)
   {  
     split=s;   
+    hostname=h;
     running = true;
     applied_lines=0LL;
     q = new queue<string>;
@@ -191,6 +199,7 @@ struct threadData_t {
   pthread_mutex_t mutex;
   int split;
   bool running;
+  string hostname;
   unsigned long long applied_lines;
   queue<string> * q;
 };
@@ -203,7 +212,7 @@ int find_queue(vector<struct threadData_t *> & tdata)
   unsigned long long sz=ULLONG_MAX;  
   for (unsigned int i=0;i<tdata.size(); i++)
     {
-      tdata[i]->lock();
+      //      tdata[i]->lock();
       if(tdata[i]->q->size() < MAX_QUEUE_SIZE)
 	{
 	  if(tdata[i]->q->size() < sz)
@@ -212,7 +221,7 @@ int find_queue(vector<struct threadData_t *> & tdata)
 	      queue=i;
 	    }
 	}
-      tdata[i]->unlock();	
+      //      tdata[i]->unlock();	
     }
   return queue;
   
@@ -239,9 +248,8 @@ applier (void * t)
 
   mysql_init(&mysql);
  
- 
   if(!mysql_real_connect(&mysql, 
-			 host,
+			 ctx->hostname.c_str(),
 			 user,
 			 password,
 			 database,
@@ -250,7 +258,7 @@ applier (void * t)
 			 0))
     {
       cout << "connect error:" + string(mysql_error(&mysql)) << endl;
-      return 0;
+      exit(-1);
     }
    
   string line="";
@@ -261,7 +269,6 @@ applier (void * t)
       if(ctx->q->size()==0 && !complete)
 	{
 	  usleep(1000*1000);
-	  //	  cout << "Queue (thread id:" << ctx->split << ") is empty" << endl;
 	  continue;
 	}
       if(complete && ctx->q->size()==0)
@@ -291,7 +298,7 @@ applier (void * t)
 	}
       ctx->applied_lines++;
       
-      if(ctx->applied_lines % 10 == 0)
+      if(ctx->applied_lines % 1000 == 0)
       	cout << "Queue (thread id:" << ctx->split << ") applied " << ctx->applied_lines << endl;
     }
 
@@ -303,7 +310,7 @@ applier (void * t)
 int main(int argc, char ** argv)
 {
   /**
-   * define a connect string to the management server
+   * defaults:
    */
   strcpy(database, "test");
   strcpy(user, "root");
@@ -312,10 +319,14 @@ int main(int argc, char ** argv)
   strcpy(password, "");
   port=3306;
   
-
-  unsigned long long total_applied_lines=0LL;
-  option(argc,argv);
+  vector<string> mysql_servers;
   
+  unsigned long long total_applied_lines=0LL;
+  option(argc,argv, mysql_servers);
+
+  if(mysql_servers.size()==0)
+    mysql_servers.push_back(host);
+
   char * db;
   if(strcmp(database,"")==0)
     db=0;
@@ -346,23 +357,25 @@ int main(int argc, char ** argv)
   cout << "Number of lines in dumpfile (include empty lines etc): " << line_count << endl;
   cout << "Lines per split: " << lines_per_split  << endl;
 
-
-
-
-
   string line;
   unsigned long long lineno=0;
-
   
   vector<pthread_t> threads;
   threads.resize(splits);
   
   threadData_t * td;  
   vector<struct threadData_t *> tdata; 
+  int no_mysql = mysql_servers.size();
+  int idx_mysql=0;
   for(int i=0; i< splits ;i++) 
     {  
-      td=new threadData_t(i);
-      tdata.push_back(td);     
+      td=new threadData_t(i, mysql_servers[idx_mysql]);
+      cout << "Allocating "<< idx_mysql << " "  << mysql_servers[idx_mysql] << " to " << i << endl;      
+      tdata.push_back(td);          
+      idx_mysql++;
+      if(idx_mysql == no_mysql)
+	idx_mysql=0;
+
     }
   for(int i=0; i< splits ;i++) 
     {
@@ -371,10 +384,11 @@ int main(int argc, char ** argv)
     }
 
   int selected_queue=0;
-  cout << "Going to read dumpfile" << endl;
+  cout << "Reading dumpfile" << endl;
+  int batch=0, batch_size=16;
   while(!dumpfile.eof())
     {      
-      
+      batch=0;
       total_applied_lines=get_count(tdata);
       
       if(total_applied_lines > 0 && (total_applied_lines % 10 == 0))
@@ -386,21 +400,27 @@ int main(int argc, char ** argv)
 	  selected_queue=find_queue(tdata);
 	}
 
-      getline(dumpfile,line);  
-      if(line.compare(0,6,"INSERT")!=0)
-	continue;
-
-
       tdata[selected_queue]->lock();
-      tdata[selected_queue]->q->push(line);
+      while(batch<batch_size)
+	{
+	  if(dumpfile.eof())
+	    break;
+	  getline(dumpfile,line);  
+	  if(line.compare(0,6,"INSERT")!=0)
+	    continue;			  
+	  tdata[selected_queue]->q->push(line);
+	  batch++;	  
+	  lineno++;
+	}
       tdata[selected_queue]->unlock();
-      lineno++;
+
     }
   complete=true;
   
   cout << "Reading dumpfile completed, pushed " << lineno << " to the queues " << endl;
-  // start real stuff here:
+
   total_applied_lines=get_count(tdata);
+
   while(total_applied_lines != lineno)
     {
       sleep(1);
