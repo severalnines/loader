@@ -53,10 +53,12 @@ void print_help()
   printf("  -? --help\t\t\tprints this information\n");
   printf("  -u --user (mysql)\n");
   printf("  -p --password (mysql)\n");
+  printf("  -P --port (mysql)\n");
   printf("  -h --host (mysql)\n");
   printf("  -S --socket (mysql)\n");
   printf("  -s --splits (number of splits, parallelism)\n");
   printf("  -d --database=<d>\t\ttarget db\n");
+  printf("  -f --dumpfile=<filename> (generated with mysqldump --no-create-info)\n");
 
   printf("  -v --verbose .\n");
 
@@ -246,7 +248,7 @@ applier (void * t)
   MYSQL mysql;
 
   mysql_init(&mysql);
- 
+  mysql_options(&mysql, MYSQL_INIT_COMMAND, "SET FOREIGN_KEY_CHECKS = 0");
   if(!mysql_real_connect(&mysql, 
 			 ctx->hostname.c_str(),
 			 user,
