@@ -5,10 +5,10 @@ CXX = g++
 CFLAGS = -c -Wall -O2 -fno-rtti -fno-exceptions
 CXXFLAGS = 
 DEBUG = 
-LFLAGS = -Wall
 MYSQL_BASEDIR = /usr/local/mysql
 INCLUDE_DIR = $(MYSQL_BASEDIR)/include/ 
 LIB_DIR = -L$(MYSQL_BASEDIR)/lib 
+LFLAGS = -Wall  -Wl,-rpath -Wl,$(MYSQL_BASEDIR)/lib
 SYS_LIB = 
 
 $(TARGET): $(OBJS)

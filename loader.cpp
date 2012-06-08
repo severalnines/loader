@@ -183,14 +183,14 @@ struct threadData_t {
   
   void lock()
   {
-    if(pthread_mutex_lock(&mutex))
-      perror("lock:");
+//    if(pthread_mutex_lock(&mutex))
+ //     perror("lock:");
   }
 
   void unlock()
   {
-    if(pthread_mutex_unlock(&mutex))
-      perror("unlock:");
+   // if(pthread_mutex_unlock(&mutex))
+    //  perror("unlock:");
   }
 
   ~threadData_t()
@@ -247,44 +247,58 @@ applier (void * t)
   threadData_t * ctx = (threadData_t *)t;
   MYSQL mysql;
 
-  mysql_init(&mysql);
-  mysql_options(&mysql, MYSQL_INIT_COMMAND, "SET FOREIGN_KEY_CHECKS = 0");
-  if(!mysql_real_connect(&mysql, 
-			 ctx->hostname.c_str(),
-			 user,
-			 password,
-			 database,
-			 port, 
-			 socket_,
-			 0))
-    {
-      cout << "connect error:" + string(mysql_error(&mysql)) << endl;
-      exit(-1);
-    }
-   
-  string line="";
 
   while(ctx->running)    
     {
-      
+ 
+      string line="";
+    retry:	
+      mysql_init(&mysql);
+      mysql_options(&mysql, MYSQL_INIT_COMMAND, "SET FOREIGN_KEY_CHECKS = 0");
+      if(!mysql_real_connect(&mysql, 
+			     ctx->hostname.c_str(),
+			     user,
+			     password,
+			     database,
+			     port, 
+			     socket_,
+			     0))
+	{
+	  cout << "connect error:" + string(mysql_error(&mysql)) << endl;
+	  mysql_close(&mysql);
+	  usleep(500*1000);
+	  goto retry;
+	}
+            
       if(ctx->q->size()==0 && !complete)
 	{
 	  usleep(1000*1000);
+	  mysql_close(&mysql);
 	  continue;
 	}
       if(complete && ctx->q->size()==0)
 	{	  
+	  mysql_close(&mysql);
 	  break;
 	}
       
-      ctx->lock();
-      line=ctx->q->front();
-      ctx->q->pop();
-      ctx->unlock();
       if(line.compare("")==0)
-	continue;
+	{ 
+	  ctx->lock();
+	  line=ctx->q->front();
+	  ctx->q->pop();
+	  ctx->unlock();
+	}
+      if(line.compare("")==0)
+	{
+	  mysql_close(&mysql);
+	  continue;
+	}
       if(line.compare(0,6,"INSERT")!=0)
-	continue;
+	{
+	  mysql_close(&mysql);
+	  continue;
+	}
       
       string::size_type pos = line.find_last_of(";");
       if(pos !=string::npos)
@@ -295,12 +309,18 @@ applier (void * t)
       if(mysql_real_query( &mysql, line.c_str(), strlen(line.c_str()) ))
 	{	  
 	  cout << "query error (thread id:" << ctx->split << ")" << " :" + string(mysql_error(&mysql)) << endl;
-	  return 0;
+	  if((mysql_errno(&mysql) == 1022) ||
+	     (mysql_errno(&mysql) == 1062))
+	    line="";	  
+	  usleep(100*1000);
+	  mysql_close(&mysql);	  
+	  goto retry;
 	}
       ctx->applied_lines++;
-      
+      line="";
       if(ctx->applied_lines % 1000 == 0)
       	cout << "Queue (thread id:" << ctx->split << ") applied " << ctx->applied_lines << endl;
+      mysql_close(&mysql);
     }
 
   cout << "Queue (thread id:" << ctx->split << ") finished applying. Applied " << ctx->applied_lines << endl;
@@ -387,13 +407,12 @@ int main(int argc, char ** argv)
   int selected_queue=0;
   cout << "Reading dumpfile" << endl;
   int batch=0, batch_size=16;
+  bool printed=false;
   while(!dumpfile.eof())
     {      
       batch=0;
       total_applied_lines=get_count(tdata);
-      
-      if(total_applied_lines > 0 && (total_applied_lines % 10 == 0))
-	cout << "Total applied lines: " << total_applied_lines << " out of approximately " << line_count << "(better approx will follow)" << endl;
+      printed=false ;
       selected_queue=find_queue(tdata);
       while(selected_queue==-1)
 	{
@@ -412,6 +431,11 @@ int main(int argc, char ** argv)
 	  tdata[selected_queue]->q->push(line);
 	  batch++;	  
 	  lineno++;
+          if(total_applied_lines > 0 && (total_applied_lines % 1000 == 0) && !printed)
+  	  {
+	      cout << "Total applied lines: " << total_applied_lines << " out of approximately " << line_count << "(better approx will follow)" << endl;
+              printed=true;
+	  }
 	}
       tdata[selected_queue]->unlock();
 
