@@ -14,6 +14,10 @@ mysqldump --no-data --routines --triggers -uroot -p -h127.0.0.1 test > test-sche
 
 mysqldump --skip-comments --no-create-info -uroot -p -h127.0.0.1 test > test-data.sql
 
+or (use --skip-extended-insert) 
+
+mysqldump --skip-comments --skip-extended-insert --no-create-info -uroot -p -h127.0.0.1 test > test-data.sql
+
 The best and recommended is thus to have a particular schema file
 
 Create the tables on the target host:
