@@ -1,0 +1,34 @@
+BUILDING:
+Make sure you have gcc and g++ installed.
+On redhat:
+  yum -y install make gcc-c++ gcc
+On debian/ubuntu:
+  ?
+
+Edit the Makefile_loadercsv and change MYSQL_BASEDIR.
+Then type:
+make -f Makefile_loadercsv
+
+You must have g++ installed.
+
+EXAMPLE RUN:
+
+./loader_csv -f <path to your csv file> -s 8 -ucmon -p<cmon password> -h<target host - one of the mysqld connected to cluster> -d<database> -t<target table>
+	
+
+SUPPORTED PARAMS:
+
+./loader_csv  -?
+  -? --help	prints this information
+  -u --user (mysql) , default 'root'
+  -p --password (mysql) , default is ''
+  -P --port (mysql) , default is 3306
+  -h --host (mysql) , default is '127.0.0.1'
+  -S --socket (mysql) , default '/tmp/mysql.sock'
+  -s --splits (number of splits, parallelism), default 4
+  -f --csvfile=<csv file> 
+  -d --database=<db name> target db
+  -t --table=<table> target table
+
+BUGS:
+https://github.com/severalnines/loader/issues
