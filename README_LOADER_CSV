@@ -23,7 +23,7 @@ SUPPORTED PARAMS:
   -u --user (mysql) , default 'root'
   -p --password (mysql) , default is ''
   -P --port (mysql) , default is 3306
-  -h --host (mysql) , default is '127.0.0.1'
+  -h --host (mysql) , default is '127.0.0.1'. This can be a comma sep list to increase speed.
   -S --socket (mysql) , default '/tmp/mysql.sock'
   -s --splits (number of splits, parallelism), default 4
   -f --csvfile=<csv file> 
