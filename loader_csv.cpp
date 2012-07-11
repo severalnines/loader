@@ -44,6 +44,7 @@ static char filename[255];
 static int port=3306;
 static int splits=4;
 static bool verbose=false;
+static bool presplit=false;
 
 
 //#########################################################################################
@@ -58,6 +59,7 @@ void print_help()
   printf("  -f --csvfile=<csv file>\n");
   printf("  -t --table=<name of target table>\n");
   printf("  -s --splits (number of splits, parallelism)\n");
+  printf("  -x --presplit (the indata files are already split in out_0, out_1, .. , out_<splits>)\n");
   printf("  -d --database=<d>\t\ttarget db\n");
 
   printf("  -v --verbose .\n");
@@ -86,13 +88,14 @@ int option(int argc, char** argv, vector<string> & mysql_servers)
 	  {"csvfile", 1, 0, 'f'},
 	  {"table", 1, 0, 't'},
 	  {"splits", 1, 0, 's'},
+	  {"presplit", 0, 0, 'x'},
 	  {"verbose", 0, 0, 'v'},
 	  {0, 0, 0, 0}
 	};
       /* getopt_long stores the option index here.   */
       int option_index = 0;
 
-      c = getopt_long (argc, argv, "?ad:c:d:p:P:u:s:f:S:h:t:",
+      c = getopt_long (argc, argv, "?vxad:c:d:p:P:u:s:f:S:h:t:",
 		       long_options, &option_index);
 
       /* Detect the end of the options.   */
@@ -157,6 +160,9 @@ int option(int argc, char** argv, vector<string> & mysql_servers)
 	  break;
 	case 'v':
 	  verbose=true;
+	  break;
+	case 'x':
+	  presplit=true;
 	  break;
 	case '?':
 	  {
@@ -226,7 +232,7 @@ applier (void * t)
 			 socket_,
 			 0))
     {
-      cout << "connect error:" + string(mysql_error(&mysql)) << endl;
+      cerr << "connect error:" + string(mysql_error(&mysql)) << endl;
       return 0;
     }
 
@@ -303,8 +309,8 @@ int main(int argc, char ** argv)
   dumpfile.close();
   dumpfile.open(filename);
 
-  cout << "Number of lines in dumpfile (include empty lines etc): " << line_count << endl;
-  cout << "Lines per split: " << lines_per_split  << endl;
+  cerr << "Number of lines in dumpfile (include empty lines etc): " << line_count << endl;
+  cerr << "Lines per split: " << lines_per_split  << endl;
 
 
 
@@ -314,38 +320,43 @@ int main(int argc, char ** argv)
   unsigned long long lineno=0;
   int current_split=0;
   
-  ofstream outfile;
-  
-  stringstream out_file;
-  out_file << "out_" << current_split << ".csv";
-  outfile.open(out_file.str().c_str(),ios::out);
-  
-  int curr_line_in_split=0;
-  #if 1
-
-  while(!dumpfile.eof())
-    {      
-      if( (curr_line_in_split == lines_per_split) && (current_split < splits-1))
-	{
-	  cout << "wrote " << out_file.str() << endl;
-	  current_split++;
-	  outfile.close();
+  if ( !presplit)
+    {
+      ofstream outfile;
+      
+      stringstream out_file;
+      out_file << "out_" << current_split << ".csv";
+      outfile.open(out_file.str().c_str(),ios::out);
+      
+      int curr_line_in_split=0;
+      
+      while(!dumpfile.eof())
+	{      
+	  if( (curr_line_in_split == lines_per_split) && (current_split < splits-1))
+	    {
+	      cerr << "wrote " << out_file.str() << endl;
+	      current_split++;
+	      outfile.close();
 	  out_file.str("");
 	  out_file << "out_" << current_split << ".csv";
 	  outfile.open(out_file.str().c_str());
 	  curr_line_in_split=0;
-	}
-      getline(dumpfile,line);  
-      if(line.compare("")!=0)
+	    }
+	  getline(dumpfile,line);  
+	  if(line.compare("")!=0)
 	{
 	  curr_line_in_split++;  	    
 	  outfile << line  << endl;
 	  lineno++;
 	}
+	}
+      outfile.close();
+      cerr << "wrote " << out_file.str() << endl;
     }
-  outfile.close();
-  cout << "wrote " << out_file.str() << endl;
-#endif 
+  else
+    {
+      cerr << "Using presplit files" << endl;
+    }
   // start real stuff here:
   
   vector<pthread_t> threads;
@@ -358,7 +369,7 @@ int main(int argc, char ** argv)
   for(int i=0; i< splits ;i++) 
     {  
       td=new threadData_t(i, mysql_servers[idx_mysql]);
-      cout << "Allocating "<< idx_mysql << " "  << mysql_servers[idx_mysql] << " to " << i << endl;      
+      cerr << "Allocating "<< idx_mysql << " "  << mysql_servers[idx_mysql] << " to " << i << endl;      
       tdata.push_back(td);          
       idx_mysql++;
       if(idx_mysql == no_mysql)
@@ -368,7 +379,7 @@ int main(int argc, char ** argv)
 
   for(int i=0; i< splits ;i++) 
     {
-      cout << "starting applier thread : " << i << endl;
+      cerr << "starting applier thread : " << i << endl;
       pthread_create(&threads[i], NULL, applier, tdata[i]);	
     }
   
