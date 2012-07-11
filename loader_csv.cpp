@@ -69,7 +69,7 @@ void print_help()
 
 
 
-int option(int argc, char** argv)
+int option(int argc, char** argv, vector<string> & mysql_servers)
 {
   int c;
   
@@ -131,6 +131,13 @@ int option(int argc, char** argv)
 	  strcpy(user,optarg);
 	  break;
 	case 'h':
+	  char * dd;
+	  dd = strtok( optarg,";, ");
+	  while (dd != NULL)
+	    {
+	      mysql_servers.push_back(string(dd));
+	      dd = strtok (NULL, ";, ");
+	    }
 	  memset( host,0,255);
 	  strcpy(host,optarg);
 	  break;
@@ -166,15 +173,21 @@ int option(int argc, char** argv)
   return 0;  
 }  
 
+
 struct threadData_t {
   
-  threadData_t(int s)
+  threadData_t(int s, string h)
   {  
-    split=s;    
+    split=s;   
+    hostname=h;
+    running = true;
   }
-
   int split;
+  bool running;
+  string hostname;
 };
+
+
 
 
 
@@ -186,17 +199,26 @@ applier (void * t)
   
   stringstream filename;
   filename << "out_" << split << ".csv";
+  string h= ctx->hostname;
+  cerr << "applier " << split << " opening " << filename.str() << endl;
+  string cmd = "LOAD DATA LOCAL INFILE '" + filename.str() + "' INTO TABLE " + string(table); 
+  cmd = "mysql -u" + string(user) + " -p" + string(password) + " -h" + h + " " + string(database) + " -A -e \"" + cmd + "\"";
+  cerr << cmd << endl;
+  system(cmd.c_str());
   
-  
-  cout << "applier " << split << " opening " << filename.str() << endl;
+#if 0
 
   MYSQL mysql;
 
   mysql_init(&mysql);
  
- 
+  unsigned int local_infile=1;
+  
+  if(mysql_options(&mysql,MYSQL_OPT_LOCAL_INFILE, (const void*)&local_infile))
+    return false;
+  
   if(!mysql_real_connect(&mysql, 
-			 host,
+			 h.c_str(),
 			 user,
 			 password,
 			 database,
@@ -210,17 +232,15 @@ applier (void * t)
 
   
   
-  string cmd = "LOAD DATA LOCAL INFILE '" + filename.str() + "' INTO TABLE " + string(table);
-  
   
   if(mysql_real_query( &mysql, cmd.c_str(), strlen(cmd.c_str()) ))
     {	  
-      cout << "query error ("<< cmd << ")" << " :" + string(mysql_error(&mysql)) << endl;
+      cerr << "query error ("<< cmd << ")" << " :" + string(mysql_error(&mysql)) << endl;
       return 0;
     }
-  
 
-  cout << "Done: "  << filename.str() << " : applied" << endl;
+#endif
+  cerr << "Done: "  << filename.str() << " : applied" << endl;
   return 0;
 }
 
@@ -240,9 +260,13 @@ int main(int argc, char ** argv)
   port=3306;
   
 
-
-  option(argc,argv);
+  vector<string> mysql_servers;
   
+  option(argc,argv, mysql_servers);
+  
+  if(mysql_servers.size()==0)
+    mysql_servers.push_back(host);
+
   char * db;
   if((strcmp(database,"")==0) || strlen(database)==0)
     {
@@ -326,11 +350,19 @@ int main(int argc, char ** argv)
   
   threadData_t * td;  
   vector<struct threadData_t *> tdata;
+  int no_mysql = mysql_servers.size();
+  int idx_mysql=0;
   for(int i=0; i< splits ;i++) 
     {  
-      td=new threadData_t(i);
-      tdata.push_back(td);     
+      td=new threadData_t(i, mysql_servers[idx_mysql]);
+      cout << "Allocating "<< idx_mysql << " "  << mysql_servers[idx_mysql] << " to " << i << endl;      
+      tdata.push_back(td);          
+      idx_mysql++;
+      if(idx_mysql == no_mysql)
+	idx_mysql=0;
+
     }
+
   for(int i=0; i< splits ;i++) 
     {
       cout << "starting applier thread : " << i << endl;
