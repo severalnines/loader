@@ -336,9 +336,12 @@ int main(int argc, char ** argv)
 	  curr_line_in_split=0;
 	}
       getline(dumpfile,line);  
-      curr_line_in_split++;  	    
-      outfile << line  << endl;
-      lineno++;
+      if(line.compare("")!=0)
+	{
+	  curr_line_in_split++;  	    
+	  outfile << line  << endl;
+	  lineno++;
+	}
     }
   outfile.close();
   cout << "wrote " << out_file.str() << endl;
