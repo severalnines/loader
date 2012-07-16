@@ -45,6 +45,7 @@ static char filename[255];
 static int port=3306;
 static int splits=4;
 static bool verbose=false;
+static bool g_local_infile=false;
 static bool presplit=false;
 static string basefile;
 static string extension="";
@@ -59,6 +60,7 @@ void print_help()
   printf("  -h --host (mysql)\n");
   printf("  -S --socket (mysql)\n");
   printf("  -f --csvfile=<csv file>\n");
+  printf("  -l --local-infile\n");
   printf("  -t --table=<name of target table>\n");
   printf("  -s --splits (number of splits, parallelism)\n");
   printf("  -D --splitdir=<directory, location of split files> \n");
@@ -94,12 +96,13 @@ int option(int argc, char** argv, vector<string> & mysql_servers)
 	  {"splitdir", 1, 0, 'D'},
 	  {"presplit", 0, 0, 'x'},
 	  {"verbose", 0, 0, 'v'},
+	  {"local-infile", 0, 0, 'l'},
 	  {0, 0, 0, 0}
 	};
       /* getopt_long stores the option index here.   */
       int option_index = 0;
 
-      c = getopt_long (argc, argv, "?vxad:c:d:p:P:u:s:f:S:h:t:D:",
+      c = getopt_long (argc, argv, "?lvxad:c:d:p:P:u:s:f:S:h:t:D:",
 		       long_options, &option_index);
 
       /* Detect the end of the options.   */
@@ -172,6 +175,9 @@ int option(int argc, char** argv, vector<string> & mysql_servers)
 	case 'x':
 	  presplit=true;
 	  break;
+	case 'l':
+	  g_local_infile=true;
+	  break;
 	case '?':
 	  {
 	    print_help();
@@ -220,8 +226,11 @@ applier (void * t)
   
   string h= ctx->hostname;
   cerr << "applier " << split << " opening " << filename.str() << endl;
+  string local="";
+  if(g_local_infile)
+    local="LOCAL";
+  string cmd = "LOAD DATA " + local + " INFILE '" + filename.str() + "' INTO TABLE " + string(table); 
 #if 1
-  string cmd = "LOAD DATA LOCAL INFILE '" + filename.str() + "' INTO TABLE " + string(table); 
   cmd = "mysql -u" + string(user) + " -p" + string(password) + " -h" + h + " " + string(database) + " -A -e \"" + cmd + "\"";
   cerr << cmd << endl;
   system(cmd.c_str());
@@ -234,11 +243,10 @@ applier (void * t)
 
   mysql_init(&mysql);
  
-  unsigned int local_infile=1;
-  /*  
+  unsigned int local_infile=g_local_infile;
   if(mysql_options(&mysql,MYSQL_OPT_LOCAL_INFILE, (const void*)&local_infile))
     return false;
-  */
+
   if(!mysql_real_connect(&mysql, 
 			 h.c_str(),
 			 user,
