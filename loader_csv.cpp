@@ -231,7 +231,7 @@ applier (void * t)
     local="LOCAL";
   string cmd = "LOAD DATA " + local + " INFILE '" + filename.str() + "' INTO TABLE " + string(table); 
 #if 1
-  cmd = "SET ndb_use_transactions=0;" + cmd;
+  cmd = "SET ndb_use_transactions=1;" + cmd;
   cmd = "mysql -u" + string(user) + " -p" + string(password) + " -h" + h + " " + string(database) + " -A -e \"" + cmd + "\"";
   cerr << cmd << endl;
   system(cmd.c_str());
@@ -315,18 +315,9 @@ int main(int argc, char ** argv)
       exit(1);
     }
   
-  
-  ifstream dumpfile(filename);
 
-  if (!dumpfile) {
-    string errmsg="Could not open log file: "  + string(filename) ;
-    cerr << errmsg << endl;
-    return false;
-  }
-
-
-  
-
+      
+      
 
 
   string s_filename(filename);
@@ -361,33 +352,45 @@ int main(int argc, char ** argv)
   cerr << "Filename : " << s_filename << endl;    
   
 
-
-  dumpfile.unsetf(std::ios_base::skipws);
-
-  // count the newlines with an algorithm specialized for counting:
-  unsigned long long line_count = std::count(
-					     std::istream_iterator<char>(dumpfile),
-					     std::istream_iterator<char>(), 
-					     '\n');
-  int lines_per_split = line_count / splits;
-  dumpfile.close();
-  dumpfile.open(filename);
-
-  cerr << "Number of lines in dumpfile (include empty lines etc): " << line_count << endl;
-  cerr << "Lines per split: " << lines_per_split  << endl;
-
-
-  
-
-
-
-
-  string line;
-  unsigned long long lineno=0;
-  int current_split=0;
-  
-  if ( !presplit)
+  if(!presplit)
     {
+      ifstream dumpfile(filename);  
+      if ( !presplit)
+	{
+	  
+	  
+	  if (!dumpfile) {
+	    string errmsg="Could not open log file: "  + string(filename) ;
+	    cerr << errmsg << endl;
+	    return false;
+	  }
+	}      
+      
+      dumpfile.unsetf(std::ios_base::skipws);
+      
+      // count the newlines with an algorithm specialized for counting:
+      unsigned long long line_count = std::count(
+						 std::istream_iterator<char>(dumpfile),
+						 std::istream_iterator<char>(), 
+					     '\n');
+      int lines_per_split = line_count / splits;
+      dumpfile.close();
+      dumpfile.open(filename);
+      
+      cerr << "Number of lines in dumpfile (include empty lines etc): " << line_count << endl;
+      cerr << "Lines per split: " << lines_per_split  << endl;
+
+
+  
+
+
+
+
+      string line;
+      unsigned long long lineno=0;
+      int current_split=0;
+      
+
       ofstream outfile;
       
       stringstream out_file;
