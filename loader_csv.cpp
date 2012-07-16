@@ -39,13 +39,15 @@ static char host[255];
 static char password[255];
 static char table[255];
 static char database[255];
+static char splitdir[255];
 static char socket_[255];
 static char filename[255];
 static int port=3306;
 static int splits=4;
 static bool verbose=false;
 static bool presplit=false;
-
+static string basefile;
+static string extension="";
 
 //#########################################################################################
 //#########################################################################################
@@ -59,6 +61,7 @@ void print_help()
   printf("  -f --csvfile=<csv file>\n");
   printf("  -t --table=<name of target table>\n");
   printf("  -s --splits (number of splits, parallelism)\n");
+  printf("  -D --splitdir=<directory, location of split files> \n");
   printf("  -x --presplit (the indata files are already split in out_0, out_1, .. , out_<splits>)\n");
   printf("  -d --database=<d>\t\ttarget db\n");
 
@@ -88,6 +91,7 @@ int option(int argc, char** argv, vector<string> & mysql_servers)
 	  {"csvfile", 1, 0, 'f'},
 	  {"table", 1, 0, 't'},
 	  {"splits", 1, 0, 's'},
+	  {"splitdir", 1, 0, 'D'},
 	  {"presplit", 0, 0, 'x'},
 	  {"verbose", 0, 0, 'v'},
 	  {0, 0, 0, 0}
@@ -95,7 +99,7 @@ int option(int argc, char** argv, vector<string> & mysql_servers)
       /* getopt_long stores the option index here.   */
       int option_index = 0;
 
-      c = getopt_long (argc, argv, "?vxad:c:d:p:P:u:s:f:S:h:t:",
+      c = getopt_long (argc, argv, "?vxad:c:d:p:P:u:s:f:S:h:t:D:",
 		       long_options, &option_index);
 
       /* Detect the end of the options.   */
@@ -120,6 +124,10 @@ int option(int argc, char** argv, vector<string> & mysql_servers)
 	case 'd':
 	  memset( database,0,255);
 	  strcpy(database,optarg);
+	  break;
+	case 'D':
+	  memset(splitdir,0,255);
+	  strcpy(splitdir,optarg);
 	  break;
 	case 't':
 	  memset( table,0,255);
@@ -204,14 +212,22 @@ applier (void * t)
   int split=ctx->split;
   
   stringstream filename;
-  filename << "out_" << split << ".csv";
+  
+  if(split < 10)
+    filename << string(splitdir) << "/" << basefile << "_0" << split << "." << extension;
+  else
+    filename << string(splitdir) << "/" << basefile << "_" << split << "." << extension;
+  
   string h= ctx->hostname;
   cerr << "applier " << split << " opening " << filename.str() << endl;
+#if 1
   string cmd = "LOAD DATA LOCAL INFILE '" + filename.str() + "' INTO TABLE " + string(table); 
   cmd = "mysql -u" + string(user) + " -p" + string(password) + " -h" + h + " " + string(database) + " -A -e \"" + cmd + "\"";
   cerr << cmd << endl;
   system(cmd.c_str());
   
+#endif 
+
 #if 0
 
   MYSQL mysql;
@@ -219,10 +235,10 @@ applier (void * t)
   mysql_init(&mysql);
  
   unsigned int local_infile=1;
-  
+  /*  
   if(mysql_options(&mysql,MYSQL_OPT_LOCAL_INFILE, (const void*)&local_infile))
     return false;
-  
+  */
   if(!mysql_real_connect(&mysql, 
 			 h.c_str(),
 			 user,
@@ -263,6 +279,7 @@ int main(int argc, char ** argv)
   strcpy(host, "127.0.0.1");
   strcpy(socket_, "/tmp/mysql.sock");
   strcpy(password, "");
+  strcpy(splitdir, "");
   port=3306;
   
 
@@ -298,6 +315,44 @@ int main(int argc, char ** argv)
     return false;
   }
 
+
+  
+
+
+
+  string s_filename(filename);
+
+  size_t sep = s_filename.find_last_of("\\/");
+  if (sep != std::string::npos)
+    s_filename = s_filename.substr(sep + 1, s_filename.size() - sep - 1);
+
+  string::size_type idx;
+
+  idx = s_filename.rfind('.');
+
+  if(idx != string::npos)
+    {
+      extension = s_filename.substr(idx+1);
+    }
+  
+  
+
+
+  string::size_type pos = s_filename.rfind(("."));
+  if((pos == string::npos) || (pos == 0))  //No extension.
+    {
+      cerr << "no extension" << endl;
+    }
+  else
+    {
+      basefile=s_filename.substr(0,pos);
+    }
+  cerr << "Extension : " << extension << endl;
+  cerr << "Basefile : " << basefile << endl;    
+  cerr << "Filename : " << s_filename << endl;    
+  
+
+
   dumpfile.unsetf(std::ios_base::skipws);
 
   // count the newlines with an algorithm specialized for counting:
@@ -313,6 +368,8 @@ int main(int argc, char ** argv)
   cerr << "Lines per split: " << lines_per_split  << endl;
 
 
+  
+
 
 
 
@@ -325,7 +382,11 @@ int main(int argc, char ** argv)
       ofstream outfile;
       
       stringstream out_file;
-      out_file << "out_" << current_split << ".csv";
+      if(current_split < 10)
+	out_file << string(splitdir) << "/" << basefile << "_0" << current_split << "." << extension;
+      else
+	out_file << string(splitdir) << "/" << basefile << "_" <<  current_split << "." << extension;
+
       outfile.open(out_file.str().c_str(),ios::out);
       
       int curr_line_in_split=0;
@@ -338,7 +399,10 @@ int main(int argc, char ** argv)
 	      current_split++;
 	      outfile.close();
 	  out_file.str("");
-	  out_file << "out_" << current_split << ".csv";
+	  if(current_split < 10)
+	    out_file << string(splitdir) << "/" << basefile << "_0" << current_split << "." << extension;
+	  else
+	    out_file << string(splitdir) << "/" << basefile << "_" <<  current_split << "." << extension;
 	  outfile.open(out_file.str().c_str());
 	  curr_line_in_split=0;
 	    }
