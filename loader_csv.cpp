@@ -33,6 +33,7 @@
 
 using namespace std;
 
+#define NDB_BATCH_SIZE 1*1024*1024
 
 static char user[255];
 static char host[255];
@@ -231,7 +232,10 @@ applier (void * t)
     local="LOCAL";
   string cmd = "LOAD DATA " + local + " INFILE '" + filename.str() + "' INTO TABLE " + string(table); 
 #if 1
-  cmd = "SET ndb_use_transactions=0;" + cmd;
+  stringstream batch_sz;
+  batch_sz << NDB_BATCH_SIZE;
+  cmd = "SET ndb_use_transactions=1;" + cmd;
+  cmd = "SET ndb_batch_size=" + batch_sz.str() +  ";" + cmd;
   cmd = "mysql -u" + string(user) + " -p" + string(password) + " -h" + h + " " + string(database) + " -A -e \"" + cmd + "\"";
   cerr << cmd << endl;
   system(cmd.c_str());
