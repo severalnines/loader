@@ -231,7 +231,8 @@ applier (void * t)
     local="LOCAL";
   string cmd = "LOAD DATA " + local + " INFILE '" + filename.str() + "' INTO TABLE " + string(table); 
 #if 1
-  cmd = "SET ndb_use_transactions=0;" + cmd;
+  cmd = "SET ndb_use_transactions=1;" + cmd;
+  cmd = "SET ndb_batch_size=2*1024*1024;" + cmd;
   cmd = "mysql -u" + string(user) + " -p" + string(password) + " -h" + h + " " + string(database) + " -A -e \"" + cmd + "\"";
   cerr << cmd << endl;
   system(cmd.c_str());
