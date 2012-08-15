@@ -33,7 +33,7 @@
 
 using namespace std;
 
-#define NDB_BATCH_SIZE 1*1024*1024
+#define NDB_BATCH_SIZE 2*1024*1024
 
 static char user[255];
 static char host[255];
@@ -64,7 +64,7 @@ void print_help()
   printf("  -l --local-infile\n");
   printf("  -t --table=<name of target table>\n");
   printf("  -s --splits (number of splits, parallelism)\n");
-  printf("  -D --splitdir=<directory, location of split files> \n");
+  printf("  -D --splitdir=<directory, location of split files, readable by mysql> \n");
   printf("  -x --presplit (the indata files are already split in out_0, out_1, .. , out_<splits>)\n");
   printf("  -d --database=<d>\t\ttarget db\n");
 
@@ -218,24 +218,31 @@ applier (void * t)
   threadData_t * ctx = (threadData_t *)t;
   int split=ctx->split;
   
-  stringstream filename;
+  stringstream ss_filename;
   
-  if(split < 10)
-    filename << string(splitdir) << "/" << basefile << "_0" << split << "." << extension;
+  if(splits>1)
+    {
+      if(split < 10)
+	ss_filename << string(splitdir) << "/" << basefile << "_0" << split << "." << extension;
+      else
+	ss_filename << string(splitdir) << "/" << basefile << "_" << split << "." << extension;
+    }
   else
-    filename << string(splitdir) << "/" << basefile << "_" << split << "." << extension;
-  
+    {
+      ss_filename << string(filename);
+    }
+      
   string h= ctx->hostname;
-  cerr << "applier " << split << " opening " << filename.str() << endl;
+  cerr << "applier " << split << " opening " << ss_filename.str() << endl;
   string local="";
   if(g_local_infile)
     local="LOCAL";
-  string cmd = "LOAD DATA " + local + " INFILE '" + filename.str() + "' INTO TABLE " + string(table); 
+  string cmd = "LOAD DATA " + local + " INFILE '" + ss_filename.str() + "' INTO TABLE " + string(table); 
 #if 1
   stringstream batch_sz;
-  batch_sz << NDB_BATCH_SIZE;
-  cmd = "SET ndb_use_transactions=1;" + cmd;
-  cmd = "SET ndb_batch_size=" + batch_sz.str() +  ";" + cmd;
+  //  batch_sz << NDB_BATCH_SIZE;
+  //cmd = "SET ndb_use_transactions=1;" + cmd;
+  // cmd = "SET ndb_batch_size=" + batch_sz.str() +  ";" + cmd;
   cmd = "mysql -u" + string(user) + " -p" + string(password) + " -h" + h + " " + string(database) + " -A -e \"" + cmd + "\"";
   cerr << cmd << endl;
   system(cmd.c_str());
@@ -275,7 +282,7 @@ applier (void * t)
     }
 
 #endif
-  cerr << "Done: "  << filename.str() << " : applied" << endl;
+  cerr << "Done: "  << ss_filename.str() << " : applied" << endl;
   return 0;
 }
 
@@ -292,7 +299,7 @@ int main(int argc, char ** argv)
   strcpy(host, "127.0.0.1");
   strcpy(socket_, "/tmp/mysql.sock");
   strcpy(password, "");
-  strcpy(splitdir, "");
+  strcpy(splitdir, "/tmp/");
   port=3306;
   
 
@@ -320,10 +327,7 @@ int main(int argc, char ** argv)
     }
   
 
-      
-      
-
-
+  
   string s_filename(filename);
 
   size_t sep = s_filename.find_last_of("\\/");
@@ -339,8 +343,6 @@ int main(int argc, char ** argv)
       extension = s_filename.substr(idx+1);
     }
   
-  
-
 
   string::size_type pos = s_filename.rfind(("."));
   if((pos == string::npos) || (pos == 0))  //No extension.
@@ -356,86 +358,94 @@ int main(int argc, char ** argv)
   cerr << "Filename : " << s_filename << endl;    
   
 
-  if(!presplit)
+  if(splits>1)
     {
-      ifstream dumpfile(filename);  
-      if ( !presplit)
+      
+      if(!presplit)
 	{
-	  
-	  
-	  if (!dumpfile) {
-	    string errmsg="Could not open log file: "  + string(filename) ;
-	    cerr << errmsg << endl;
-	    return false;
-	  }
-	}      
-      
-      dumpfile.unsetf(std::ios_base::skipws);
-      
-      // count the newlines with an algorithm specialized for counting:
-      unsigned long long line_count = std::count(
-						 std::istream_iterator<char>(dumpfile),
-						 std::istream_iterator<char>(), 
-					     '\n');
-      int lines_per_split = line_count / splits;
-      dumpfile.close();
-      dumpfile.open(filename);
-      
-      cerr << "Number of lines in dumpfile (include empty lines etc): " << line_count << endl;
-      cerr << "Lines per split: " << lines_per_split  << endl;
-
-
-  
-
-
-
-
-      string line;
-      unsigned long long lineno=0;
-      int current_split=0;
-      
-
-      ofstream outfile;
-      
-      stringstream out_file;
-      if(current_split < 10)
-	out_file << string(splitdir) << "/" << basefile << "_0" << current_split << "." << extension;
-      else
-	out_file << string(splitdir) << "/" << basefile << "_" <<  current_split << "." << extension;
-
-      outfile.open(out_file.str().c_str(),ios::out);
-      
-      int curr_line_in_split=0;
-      
-      while(!dumpfile.eof())
-	{      
-	  if( (curr_line_in_split == lines_per_split) && (current_split < splits-1))
+	  ifstream dumpfile(filename);  
+	  if ( !presplit)
 	    {
-	      cerr << "wrote " << out_file.str() << endl;
-	      current_split++;
-	      outfile.close();
-	  out_file.str("");
+	      
+	      
+	      if (!dumpfile) {
+		string errmsg="Could not open log file: "  + string(filename) ;
+		cerr << errmsg << endl;
+		return false;
+	      }
+	    }      
+	  
+	  dumpfile.unsetf(std::ios_base::skipws);
+	  
+	  // count the newlines with an algorithm specialized for counting:
+	  unsigned long long line_count = std::count(
+						     std::istream_iterator<char>(dumpfile),
+						     std::istream_iterator<char>(), 
+						     '\n');
+	  int lines_per_split = line_count / splits;
+	  dumpfile.close();
+	  dumpfile.open(filename);
+	  
+	  cerr << "Number of lines in dumpfile (include empty lines etc): " << line_count << endl;
+	  cerr << "Lines per split: " << lines_per_split  << endl;
+	  
+	  
+	  
+	  
+	  
+	  
+	  
+	  string line;
+	  unsigned long long lineno=0;
+	  int current_split=0;
+	  
+	  
+	  ofstream outfile;
+	  
+	  stringstream out_file;
 	  if(current_split < 10)
 	    out_file << string(splitdir) << "/" << basefile << "_0" << current_split << "." << extension;
 	  else
 	    out_file << string(splitdir) << "/" << basefile << "_" <<  current_split << "." << extension;
-	  outfile.open(out_file.str().c_str());
-	  curr_line_in_split=0;
+	  
+	  outfile.open(out_file.str().c_str(),ios::out);
+	  
+	  int curr_line_in_split=0;
+	  
+	  while(!dumpfile.eof())
+	    {      
+	      if( (curr_line_in_split == lines_per_split) && (current_split < splits-1))
+		{
+		  cerr << "wrote " << out_file.str() << endl;
+		  current_split++;
+		  outfile.close();
+		  out_file.str("");
+		  if(current_split < 10)
+		    out_file << string(splitdir) << "/" << basefile << "_0" << current_split << "." << extension;
+		  else
+		    out_file << string(splitdir) << "/" << basefile << "_" <<  current_split << "." << extension;
+		  outfile.open(out_file.str().c_str());
+		  curr_line_in_split=0;
+		}
+	      getline(dumpfile,line);  
+	      if(line.compare("")!=0)
+		{
+		  curr_line_in_split++;  	    
+		  outfile << line  << endl;
+		  lineno++;
+		}
 	    }
-	  getline(dumpfile,line);  
-	  if(line.compare("")!=0)
+	  outfile.close();
+	  cerr << "wrote " << out_file.str() << endl;
+	}
+      else
 	{
-	  curr_line_in_split++;  	    
-	  outfile << line  << endl;
-	  lineno++;
+	  cerr << "Using presplit files" << endl;
 	}
-	}
-      outfile.close();
-      cerr << "wrote " << out_file.str() << endl;
     }
   else
     {
-      cerr << "Using presplit files" << endl;
+      splits=1;
     }
   // start real stuff here:
   
