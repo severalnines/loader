@@ -33,7 +33,6 @@
 
 using namespace std;
 
-#define MAX_QUEUE_SIZE 10000
 
 static char user[255];
 static char host[255];
@@ -44,7 +43,7 @@ static char filename[255];
 static int port=3306;
 static int splits=4;
 static bool verbose=false;
-static bool complete=false;
+
 
 //#########################################################################################
 //#########################################################################################
@@ -53,12 +52,10 @@ void print_help()
   printf("  -? --help\t\t\tprints this information\n");
   printf("  -u --user (mysql)\n");
   printf("  -p --password (mysql)\n");
-  printf("  -P --port (mysql)\n");
   printf("  -h --host (mysql)\n");
   printf("  -S --socket (mysql)\n");
   printf("  -s --splits (number of splits, parallelism)\n");
   printf("  -d --database=<d>\t\ttarget db\n");
-  printf("  -f --dumpfile=<filename> (generated with mysqldump --no-create-info)\n");
 
   printf("  -v --verbose .\n");
 
@@ -69,7 +66,7 @@ void print_help()
 
 
 
-int option(int argc, char** argv, vector<string> & mysql_servers)
+int option(int argc, char** argv)
 {
   int c;
   
@@ -126,13 +123,6 @@ int option(int argc, char** argv, vector<string> & mysql_servers)
 	  strcpy(user,optarg);
 	  break;
 	case 'h':
-	  char * dd;
-	  dd = strtok( optarg,";, ");
-	  while (dd != NULL)
-	    {
-	      mysql_servers.push_back(string(dd));
-	      dd = strtok (NULL, ";, ");
-	    }
 	  memset( host,0,255);
 	  strcpy(host,optarg);
 	  break;
@@ -146,6 +136,11 @@ int option(int argc, char** argv, vector<string> & mysql_servers)
 	  break;
 	case 's':
 	  splits=atoi(optarg);
+	  if(splits>16)
+	    {
+	      cout << "Max 16 splits" << endl;
+	      exit(1);
+	    }
 	  break;
 	case 'P':
 	  port=atoi(optarg);
@@ -170,160 +165,108 @@ int option(int argc, char** argv, vector<string> & mysql_servers)
 
 struct threadData_t {
   
-  threadData_t(int s, string h)
+  threadData_t(int s, string f)
   {  
-    split=s;   
-    hostname=h;
-    running = true;
-    applied_lines=0LL;
-    q = new queue<string>;
-    if(pthread_mutex_init(&mutex, NULL))
-      perror("init_lock:");
-  }
-  
-  void lock()
-  {
-//    if(pthread_mutex_lock(&mutex))
- //     perror("lock:");
+    split=s;    
+    filename=f;
   }
 
-  void unlock()
-  {
-   // if(pthread_mutex_unlock(&mutex))
-    //  perror("unlock:");
-  }
-
-  ~threadData_t()
-  {
-    pthread_mutex_destroy(&mutex);
-  }
-  
-  pthread_mutex_t mutex;
   int split;
-  bool running;
-  string hostname;
-  unsigned long long applied_lines;
-  queue<string> * q;
+  string filename;
 };
 
-
-int find_queue(vector<struct threadData_t *> & tdata)
-{
-  int queue=-1;
-  
-  unsigned long long sz=ULLONG_MAX;  
-  for (unsigned int i=0;i<tdata.size(); i++)
-    {
-      //      tdata[i]->lock();
-      if(tdata[i]->q->size() < MAX_QUEUE_SIZE)
-	{
-	  if(tdata[i]->q->size() < sz)
-	    {
-	      sz=tdata[i]->q->size();
-	      queue=i;
-	    }
-	}
-      //      tdata[i]->unlock();	
-    }
-  return queue; 
-}
-
-
-unsigned long long  get_count(vector<struct threadData_t *> & tdata)
-{
-  unsigned long long total_applied_lines=0LL;
-  for (unsigned int i=0;i<tdata.size(); i++)
-    {
-      total_applied_lines+=tdata[i]->applied_lines;
-    }
-  return total_applied_lines;
-  
-}
 
 
 void *
 applier (void * t)
 {
   threadData_t * ctx = (threadData_t *)t;
+  int split=ctx->split;
+  string filename=ctx->filename;
+  
+  cout << "applier " << split << " opening " << filename << endl;
+  
+  ifstream splitfile(filename.c_str());
+  /*
+  splitfile.unsetf(std::ios_base::skipws);
+  
+  unsigned long long line_count = std::count(
+					     std::istream_iterator<char>(splitfile),
+					     std::istream_iterator<char>(), 
+					     '\n');
+  splitfile.close();
+  */
+  //  splitfile.open(filename.c_str());
+
+  
   MYSQL mysql;
 
-
-  while(ctx->running)    
-    {
+  mysql_init(&mysql);
  
-      string line="";
-    retry:	
-      mysql_init(&mysql);
-      mysql_options(&mysql, MYSQL_INIT_COMMAND, "SET FOREIGN_KEY_CHECKS = 0");
-      if(!mysql_real_connect(&mysql, 
-			     ctx->hostname.c_str(),
-			     user,
-			     password,
-			     database,
-			     port, 
-			     socket_,
-			     0))
-	{
-	  cout << "connect error:" + string(mysql_error(&mysql)) << endl;
-	  mysql_close(&mysql);
-	  usleep(500*1000);
-	  goto retry;
-	}
-            
-      if(ctx->q->size()==0 && !complete)
-	{
-	  usleep(1000*1000);
-	  mysql_close(&mysql);
-	  continue;
-	}
-      if(complete && ctx->q->size()==0)
-	{	  
-	  mysql_close(&mysql);
-	  break;
-	}
-      
-      if(line.compare("")==0)
-	{ 
-	  ctx->lock();
-	  line=ctx->q->front();
-	  ctx->q->pop();
-	  ctx->unlock();
-	}
-      if(line.compare("")==0)
-	{
-	  mysql_close(&mysql);
-	  continue;
-	}
-      if(line.compare(0,6,"INSERT")!=0)
-	{
-	  mysql_close(&mysql);
-	  continue;
-	}
-      
-      string::size_type pos = line.find_last_of(";");
-      if(pos !=string::npos)
-	{
-	  line.erase(pos);
-	}
+ 
+  if(!mysql_real_connect(&mysql, 
+			 host,
+			 user,
+			 password,
+			 database,
+			 port, 
+			 socket_,
+			 0))
+    {
+      cout << "connect error:" + string(mysql_error(&mysql)) << endl;
+      return 0;
+    }
+  
+  string cmd = "cat " + filename + " | mysql -u" + string(user) + " -p" + string(password) + " -h" + string(host) + " " + string(database) ;
+  cerr << cmd << endl;
+  int ret=system(cmd.c_str());
 
-      if(mysql_real_query( &mysql, line.c_str(), strlen(line.c_str()) ))
-	{	  
-	  cout << "query error (thread id:" << ctx->split << ")" << " :" + string(mysql_error(&mysql)) << endl;
-	  if((mysql_errno(&mysql) == 1022) ||
-	     (mysql_errno(&mysql) == 1062))
-	    line="";	  
-	  usleep(100*1000);
-	  mysql_close(&mysql);	  
-	  goto retry;
-	}
-      ctx->applied_lines++;
-      line="";
-      if(ctx->applied_lines % 1000 == 0)
-      	cout << "Queue (thread id:" << ctx->split << ") applied " << ctx->applied_lines << endl;
-      mysql_close(&mysql);
+  if(ret!=0)
+    {
+      cerr << "failed" << endl;
+      return 0;
     }
 
-  cout << "Queue (thread id:" << ctx->split << ") finished applying. Applied " << ctx->applied_lines << endl;
+  unsigned long long lineno=0;    
+  #if 0
+
+  string line="";
+  while(!splitfile.eof())    
+    {
+      line="";
+      getline(splitfile,line);
+      if(line.compare("")==0)
+	continue;
+      if(
+	 (line.compare(0,6,"INSERT") == 0) ||
+	 (line.compare(0,6,"CHANGE") == 0))
+	{
+	  
+	  lineno++;	    
+	  
+	  string::size_type pos = line.find_last_of(";");
+	  if(pos !=string::npos)
+	    {
+	      line.erase(pos);
+	    }
+	  if(lineno > 0 && (lineno % 1000 == 0))
+	    {
+	      cout << filename << " : applied " << lineno << endl;      
+	    }
+	  
+	  
+      //      cout << line << endl;
+	  
+	  if(mysql_real_query( &mysql, line.c_str(), strlen(line.c_str()) ))
+	    {	  
+	      cout << "query error ("<< filename << ")" << " :" + string(mysql_error(&mysql)) << endl;
+	  cout << line << endl;
+	  return 0;
+	    }
+	}
+    }
+#endif 
+  cout << "Done: "  << filename << " : applied" << lineno << endl;
   return 0;
 }
 
@@ -331,8 +274,11 @@ applier (void * t)
 int main(int argc, char ** argv)
 {
   /**
-   * defaults:
+   * define a connect string to the management server
    */
+  
+
+
   strcpy(database, "test");
   strcpy(user, "root");
   strcpy(host, "127.0.0.1");
@@ -340,30 +286,49 @@ int main(int argc, char ** argv)
   strcpy(password, "");
   port=3306;
   
-  vector<string> mysql_servers;
-  
-  unsigned long long total_applied_lines=0LL;
-  option(argc,argv, mysql_servers);
+  vector<string> splitnames;
+  splitnames.push_back("xaa");
+  splitnames.push_back("xab");
+  splitnames.push_back("xac");
+  splitnames.push_back("xad");
+  splitnames.push_back("xae");
+  splitnames.push_back("xaf");
+  splitnames.push_back("xag");
+  splitnames.push_back("xah");
+  splitnames.push_back("xai");
+  splitnames.push_back("xaj");
+  splitnames.push_back("xak");
+  splitnames.push_back("xal");
+  splitnames.push_back("xam");
+  splitnames.push_back("xan");
+  splitnames.push_back("xao");
+  splitnames.push_back("xap");
+  splitnames.push_back("xaq");
+  splitnames.push_back("xar");
 
-  if(mysql_servers.size()==0)
-    mysql_servers.push_back(host);
 
+
+  option(argc,argv);
+/*  
   char * db;
   if(strcmp(database,"")==0)
     db=0;
   else
     db=database;
-
-
-  ifstream dumpfile(filename);
-
-  //  dumpfile.open(filename, ios::in);
+*/
+#if 0
+  ifstream dumpfile;
+  
+  dumpfile.open(filename, ios::in);
+  
   if (!dumpfile) {
     string errmsg="Could not open log file: "  + string(filename) ;
     cerr << errmsg << endl;
     return false;
   }
+  
 
+  cout << "Counting lines. It may take a while" << endl;
   dumpfile.unsetf(std::ios_base::skipws);
 
   // count the newlines with an algorithm specialized for counting:
@@ -371,91 +336,80 @@ int main(int argc, char ** argv)
 					     std::istream_iterator<char>(dumpfile),
 					     std::istream_iterator<char>(), 
 					     '\n');
-  int lines_per_split = line_count / splits;
+  int lines_per_split = (line_count / splits)  +  splits;
   dumpfile.close();
   dumpfile.open(filename);
 
   cout << "Number of lines in dumpfile (include empty lines etc): " << line_count << endl;
   cout << "Lines per split: " << lines_per_split  << endl;
+#endif
+
+  cout << "Creating " << splits << " splits, this may take a while." << endl;
+  stringstream cmd;
+  cmd << "split " << filename << " -n l/" << splits ;
+  //  cmd << "split " << filename << " -n" << splits ;
+  if( system(cmd.str().c_str()) !=0)
+    {
+      cout << "Failed to sply files" << endl;
+      exit(1);
+    }
+  
+
+  #if 0
+  
+
 
   string line;
   unsigned long long lineno=0;
+  int current_split=0;
+  
+  ofstream outfile;
+  
+  stringstream out_file;
+  out_file << "out_" << current_split << ".sql";
+  outfile.open(out_file.str().c_str(),ios::out);
+  
+  int curr_line_in_split=0;
+
+
+  while(!dumpfile.eof())
+    {      
+      if( (curr_line_in_split == lines_per_split) && (current_split < splits-1))
+	{
+	  cout << "wrote " << out_file.str() << endl;
+	  current_split++;
+	  outfile.close();
+	  out_file.str("");
+	  out_file << "out_" << current_split << ".sql";
+	  outfile.open(out_file.str().c_str());
+	  curr_line_in_split=0;
+	}
+      getline(dumpfile,line);  
+      curr_line_in_split++;  	    
+      outfile << line  << endl;
+      lineno++;
+    }
+  outfile.close();
+  cout << "wrote " << out_file.str() << endl;
+#endif 
+  // start real stuff here:
   
   vector<pthread_t> threads;
   threads.resize(splits);
   
   threadData_t * td;  
-  vector<struct threadData_t *> tdata; 
-  int no_mysql = mysql_servers.size();
-  int idx_mysql=0;
+  vector<struct threadData_t *> tdata;
   for(int i=0; i< splits ;i++) 
     {  
-      td=new threadData_t(i, mysql_servers[idx_mysql]);
-      cout << "Allocating "<< idx_mysql << " "  << mysql_servers[idx_mysql] << " to " << i << endl;      
-      tdata.push_back(td);          
-      idx_mysql++;
-      if(idx_mysql == no_mysql)
-	idx_mysql=0;
-
+      td=new threadData_t(i, splitnames[i]);  
+      tdata.push_back(td);     
     }
   for(int i=0; i< splits ;i++) 
     {
       cout << "starting applier thread : " << i << endl;
       pthread_create(&threads[i], NULL, applier, tdata[i]);	
     }
-
-  int selected_queue=0;
-  cout << "Reading dumpfile" << endl;
-  int batch=0, batch_size=16;
-  bool printed=false;
-  while(!dumpfile.eof())
-    {      
-      batch=0;
-      total_applied_lines=get_count(tdata);
-      printed=false ;
-      selected_queue=find_queue(tdata);
-      while(selected_queue==-1)
-	{
-	  usleep(1000*500);
-	  selected_queue=find_queue(tdata);
-	}
-
-      tdata[selected_queue]->lock();
-      while(batch<batch_size)
-	{
-	  if(dumpfile.eof())
-	    break;
-	  getline(dumpfile,line);  
-	  if(line.compare(0,6,"INSERT")!=0)
-	    continue;			  
-	  tdata[selected_queue]->q->push(line);
-	  batch++;	  
-	  lineno++;
-          if(total_applied_lines > 0 && (total_applied_lines % 1000 == 0) && !printed)
-  	  {
-	      cout << "Total applied lines: " << total_applied_lines << " out of approximately " << line_count << "(better approx will follow)" << endl;
-              printed=true;
-	  }
-	}
-      tdata[selected_queue]->unlock();
-
-    }
-  complete=true;
   
-  cout << "Reading dumpfile completed, pushed " << lineno << " to the queues " << endl;
-
-  total_applied_lines=get_count(tdata);
-
-  while(total_applied_lines != lineno)
-    {
-      sleep(1);
-      total_applied_lines=get_count(tdata);
-      if(total_applied_lines > 0 && (total_applied_lines % 10 == 0))
-	cout << "Total applied lines: " << total_applied_lines << " out of " << lineno << endl;
-    }
-  cout << endl << "Done!" << endl;
-  cout << "Total applied lines: " << total_applied_lines << " out of " << lineno << endl;
- 
   for(int i=0; i< splits ;i++) 
     {
       pthread_join(threads[i], NULL);
